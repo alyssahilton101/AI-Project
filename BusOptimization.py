@@ -1,5 +1,4 @@
 import random
-import numpy
 from deap import base, creator, tools, algorithms
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -53,58 +52,62 @@ class BusRouteOptimization:
     # Buses can have different numbers of stops.
     # Each bus has unique stops (no duplicates within a single bus's route).
     def create_individual(self):
-        #Making a new dictionary where the keys are bus names and the values are blank lists
         buses = {f"Bus {i + 1}": [] for i in range(self.num_buses)}
         shuffled_stops = self.stops[:]
         random.shuffle(shuffled_stops)
-        # Assigning stops to the buses
-        for stop in shuffled_stops:
-            bus = random.choice(list(buses.keys()))
+        # Assign stops to buses
+        for i, stop in enumerate(shuffled_stops):
+            bus = f"Bus {(i % self.num_buses) + 1}"
             buses[bus].append(stop)
         return buses
 
     # Creating the evaluation function
     # Should look at a given route and calculate the average distance, wait time, and travel time
     def evaluate(self, individual):
-        # Initializing variables to store the total values
         total_distance, total_wait_time, total_travel_time = 0, 0, 0
         num_distances, num_routes = 0, 0
 
-        # Loop through each bus and its route to calculate the total values
+        # Check if all stops are covered
+        all_stops = set(self.stops)
+        covered_stops = set(stop for route in individual.values() for stop in route)
+        # Penalize individuals that do not cover all stops
+        if covered_stops != all_stops:
+            return 1e10, 1e10, 1e10
+
+        # Loop through each bus and calculate metrics
         for bus, route in individual.items():
-            if len(route) < 2:  # Skip routes with fewer than 2 stops
+            #Skip empty routes or single stop routes
+            if len(route) < 2:
                 continue
 
-            route_distance = 0
-            route_travel_time = 0
-            route_wait_time = 0
+            route_distance, route_travel_time, route_wait_time = 0, 0, 0
 
-            # Calculate distance and travel time for the route
+            # Calculate route metrics
             for i in range(len(route) - 1):
                 stop1, stop2 = route[i], route[i + 1]
                 # Check if the route is valid
                 if self.isRouteValid(stop1, stop2):
-                    route_distance += self.distance_matrix.get((stop1, stop2), 0)
-                    route_travel_time += self.travel_time.get((stop1, stop2), 0)
+                    route_distance += self.distance_matrix.get((stop1, stop2), 1e10)
+                    route_travel_time += self.travel_time.get((stop1, stop2), 1e10)
                     num_distances += 1
+                # Penalize invalid routes
                 else:
-                    # Penalize invalid routes
-                    return 9999999999999999, 9999999999999999, 9999999999999999
+                    return 1e10, 1e10, 1e10  
 
-            # Sum the route wait time for this bus
-            route_wait_time += route_travel_time
+            # Update total metrics
             total_distance += route_distance
             total_travel_time += route_travel_time
-            total_wait_time += route_wait_time
+            total_wait_time += route_travel_time  
             num_routes += 1
 
         # Calculate averages
-        average_distance = total_distance / num_distances if num_distances > 0 else 0
-        average_wait_time = total_wait_time / num_routes if num_routes > 0 else 0
-        average_travel_time = total_travel_time / num_distances if num_distances > 0 else 0
+        average_distance = total_distance / num_distances if num_distances > 0 else 1e10
+        average_wait_time = total_wait_time / num_routes if num_routes > 0 else 1e10
+        average_travel_time = total_travel_time / num_distances if num_distances > 0 else 1e10
 
         return average_distance, average_wait_time, average_travel_time
 
+    # Check if a route between two stops is valid
     def isRouteValid(self, stop1, stop2):
         if stop1 == stop2:
             return False
@@ -117,26 +120,21 @@ class BusRouteOptimization:
     # Crossover function
     # Randomly selects two buses from each individual and swaps a random segment of their routes
     def crossover(self, ind1, ind2):
-        # Ensure both individuals have at least two buses for crossover
-        if len(ind1) < 2 or len(ind2) < 2:
-            return ind1, ind2
-
-        # Randomly select two buses from each individual
+       # Select two random buses from each parent
         bus1, bus2 = random.sample(list(ind1.keys()), 1)[0], random.sample(list(ind2.keys()), 1)[0]
-
-        # Retrieve their routes
+        
+        # Get the routes for the selected buses
         route1, route2 = ind1[bus1], ind2[bus2]
 
-        # Perform a simple swap of a random segment
+    
         size = min(len(route1), len(route2))
         if size > 1:
             idx = random.randint(1, size - 1)
             ind1[bus1], ind2[bus2] = route1[:idx] + route2[idx:], route2[:idx] + route1[idx:]
 
-        return ind1, ind2
+        # Ensure all stops are covered
+        return self.repair_routes(ind1), self.repair_routes(ind2)
 
-    # Mutation function
-    # Randomly selects a stop from the routes and reassigns it to a different bus
     def mutate(self, individual):
         # Choose a random stop from the routes
         stop = random.choice(self.stops)
@@ -169,9 +167,30 @@ class BusRouteOptimization:
             # If only one bus exists, simply shuffle the order of stops
             random.shuffle(individual[current_bus])
 
-        return individual,
+            # Remove duplicates from each route
+        for bus in individual.keys():
+            unique_route = []
+            seen_stops = set()
+            for stop in individual[bus]:
+                if stop not in seen_stops:
+                    unique_route.append(stop)
+                    seen_stops.add(stop)
+            individual[bus] = unique_route
 
+        # Ensure all stops are covered
+        return self.repair_routes(individual),
 
+    def repair_routes(self, individual):
+        all_stops = set(self.stops)
+        assigned_stops = set(stop for route in individual.values() for stop in route)
+        missing_stops = all_stops - assigned_stops
+
+        # Assign missing stops to random buses
+        for stop in missing_stops:
+            random_bus = random.choice(list(individual.keys()))
+            individual[random_bus].append(stop)
+
+        return individual
 
     def run(self, generations=50, population_size=50):
         population = self.toolbox.population(n=population_size)
