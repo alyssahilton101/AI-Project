@@ -21,8 +21,6 @@ class BusRouteOptimization:
             ("A", "B"): 4,
             ("B", "C"): 6,
         }
-        # Dictionary of wait times at each stop
-        self.wait_time = {"A": 1, "B": 5, "C": 10, "D": 15, "E": 20}
         # Dictionary of travel times between stops
         self.travel_time = {
             ("A", "D"): 5,
@@ -33,7 +31,7 @@ class BusRouteOptimization:
             ("A", "B"): 4,
             ("B", "C"): 6,
         }
-        self.num_buses = 1
+        self.num_buses = 2
 
         # DEAP setup
         creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0, -1.0))
@@ -68,29 +66,44 @@ class BusRouteOptimization:
     # Creating the evaluation function
     # Should look at a given route and calculate the average distance, wait time, and travel time
     def evaluate(self, individual):
+        # Initializing variables to store the total values
         total_distance, total_wait_time, total_travel_time = 0, 0, 0
-        num_distances,  num_stops = 0, 0
+        num_distances, num_routes = 0, 0
+
+        # Loop through each bus and its route to calculate the total values
         for bus, route in individual.items():
-            if len(route) < 2:
+            if len(route) < 2:  # Skip routes with fewer than 2 stops
                 continue
+
+            route_distance = 0
+            route_travel_time = 0
+            route_wait_time = 0
+
+            # Calculate distance and travel time for the route
             for i in range(len(route) - 1):
                 stop1, stop2 = route[i], route[i + 1]
+                # Check if the route is valid
                 if self.isRouteValid(stop1, stop2):
-                    total_distance += self.distance_matrix.get((stop1, stop2), 0)
-                    total_travel_time += self.travel_time.get((stop1, stop2), 0)
+                    route_distance += self.distance_matrix.get((stop1, stop2), 0)
+                    route_travel_time += self.travel_time.get((stop1, stop2), 0)
                     num_distances += 1
                 else:
-                    return 10000, 10000, 10000
-            for stop in route:
-                total_wait_time += self.wait_time.get(stop, 0)
-                num_stops += 1
+                    # Penalize invalid routes
+                    return 9999999999999999, 9999999999999999, 9999999999999999
 
+            # Sum the route wait time for this bus
+            route_wait_time += route_travel_time
+            total_distance += route_distance
+            total_travel_time += route_travel_time
+            total_wait_time += route_wait_time
+            num_routes += 1
+
+        # Calculate averages
         average_distance = total_distance / num_distances if num_distances > 0 else 0
-        average_wait_time = total_wait_time / num_stops if num_stops > 0 else 0
+        average_wait_time = total_wait_time / num_routes if num_routes > 0 else 0
         average_travel_time = total_travel_time / num_distances if num_distances > 0 else 0
 
         return average_distance, average_wait_time, average_travel_time
-
 
     def isRouteValid(self, stop1, stop2):
         if stop1 == stop2:
@@ -101,6 +114,8 @@ class BusRouteOptimization:
             return False
         return True
 
+    # Crossover function
+    # Randomly selects two buses from each individual and swaps a random segment of their routes
     def crossover(self, ind1, ind2):
         # Ensure both individuals have at least two buses for crossover
         if len(ind1) < 2 or len(ind2) < 2:
@@ -120,12 +135,26 @@ class BusRouteOptimization:
 
         return ind1, ind2
 
+    # Mutation function
+    # Randomly selects a stop from the routes and reassigns it to a different bus
     def mutate(self, individual):
         # Choose a random stop from the routes
         stop = random.choice(self.stops)
+        current_bus = next(
+            (bus for bus, route in individual.items()
+             if
+             stop in route and all(self.isRouteValid(stop, other_stop) for other_stop in route if other_stop != stop)),
+            None
+        )
 
-        # Identify the bus currently serving this stop
-        current_bus = [bus for bus, route in individual.items() if stop in route][0]
+        if current_bus is None:
+            return individual,
+
+        # Ensure the stop exists in the route before removing
+        if stop in individual[current_bus]:
+            individual[current_bus].remove(stop)
+        else:
+            raise ValueError(f"Stop {stop} not found in the route of bus {current_bus}.")
 
         # Ensure there is more than one bus available for reassignment
         if len(individual) > 1:
@@ -134,7 +163,7 @@ class BusRouteOptimization:
             new_bus = random.choice(other_buses)
 
             # Remove stop from the current bus and assign it to the new bus
-            individual[current_bus].remove(stop)
+
             individual[new_bus].append(stop)
         else:
             # If only one bus exists, simply shuffle the order of stops
@@ -144,7 +173,7 @@ class BusRouteOptimization:
 
 
 
-    def run(self, generations=50, population_size=5):
+    def run(self, generations=50, population_size=50):
         population = self.toolbox.population(n=population_size)
         hof = tools.ParetoFront()
         stats = tools.Statistics(lambda ind: ind.fitness.values)
@@ -152,23 +181,13 @@ class BusRouteOptimization:
                        lambda values: tuple(sum(v[i] for v in values) / len(values) for i in range(len(values[0]))))
 
         stats.register("min", min)
-
-
-
         algorithms.eaMuPlusLambda(
             population, self.toolbox,
             mu=population_size, lambda_=2 * population_size,
             cxpb=0.7, mutpb=0.2, ngen=generations,
             stats=stats, halloffame=hof, verbose=True
         )
-
-
-
         return population, hof
-
-
-
-
 
 def plot_bus_routes(individual, distance_matrix):
     G = nx.DiGraph()
