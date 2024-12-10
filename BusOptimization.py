@@ -2,35 +2,46 @@ import random
 from deap import base, creator, tools, algorithms
 import matplotlib.pyplot as plt
 import networkx as nx
+import csv
 
 
 class BusRouteOptimization:
     def __init__(self):
-        # Setting up problem data. Using sample data for a single route for now
-        # This will be replaced by the actual data and many buses later
-        # List of all stops
-        self.stops = ["A", "B", "C", "D", "E"]
-        # Dictionary of distances between stops. Currently, they are tuples of the form (stop1, stop2): distance
-        self.distance_matrix = {
-            ("A", "D"): 10,
-            ("D", "E"): 2,
-            ("B", "D"): 100,
-            ("B", "E"): 5,
-            ("C", "E"): 150,
-            ("A", "B"): 4,
-            ("B", "C"): 6,
+        # Reading the stops from the file
+        self.distance_matrix = {}
+        path = 'C:\\Users\\alyss\\PycharmProjects\\Assignment%\\.venv\\'
+        file = open(path + "DistanceData.csv", "r")
+        reader = csv.reader(file)
+
+        self.stops = next(reader)  # Assuming the first row has stop names
+        for row in reader:
+            for i in range(1, len(row)):
+                self.distance_matrix[(row[0], self.stops[i])] = float(row[i])  # Use float for distances
+
+        file.close()
+
+        # Generate travel times
+        self.travel_time = {}
+
+        # Enforce symmetry and realism
+        for stop1 in self.stops:
+            for stop2 in self.stops:
+                if stop1 != stop2:
+                    if (stop1, stop2) not in self.travel_time:
+                        # Generate a time based on distance (e.g., 10x shorter than distance or random if not provided)
+                        distance = self.distance_matrix.get((stop1, stop2), random.uniform(1, 10))
+                        time = max(1, int(distance * random.uniform(0.8, 1.2)))  # Add variability, ensure min time is 1
+                        self.travel_time[(stop1, stop2)] = time
+                        self.travel_time[(stop2, stop1)] = time  # Symmetry
+
+        self.num_buses = 5
+        self.starting_pop = {
+            "Bus 1": ["Fisher Court", "Balfour", "Kappa Sigma/Chi Omega", "Lingelbach", "Kappa Delta/SRSC", "Neal Marshall", "3rd and Eagleson", "Biology Building", "Law School", "Kappa Delta/SRSC", "Lingelbach", "17th & Baker/Phi Sigma Kappa","Kappa Sigma/Chi Omega", "Balfour", "Fisher Court"],
+            "Bus 2": ["RAHC", "Redbud", "Campus View", "Union Street Center", "7th & Union", "Willkie", "Forest","3rd and Eagleson", "Biology Building", "Law School", "IMU Shelter", "10th & Woodlawn", "Psychology", "Wells Library", "10th & Sunrise", "Campus View", "Redbud", "RAHC"],
+            "Bus 3": ["Assembly Hall", "Briscoe", "Foster/McNutt", "Kelley School", "Wells Library", "3rd and Eagleson", "Biology Building", "Law School", "Kirkwood & Indiana", "IMU Shelter", "10th & Woodlawn", "Psychology", "Kelley School", "Foster/McNutt", "Briscoe", "Assembly Hall"],
+            "Bus 4": ["Stadium", "Luddy Hall","7th & Woodlawn", "IMU Shelter", "Auditorium", "10th & Woodlawn", "Luddy Hall", "Stadium"],
+            "Bus 5": ["Stadium", "Luddy Hall", "Psychology", "Kelley School", "Stadium"],
         }
-        # Dictionary of travel times between stops
-        self.travel_time = {
-            ("A", "D"): 5,
-            ("D", "E"): 2,
-            ("B", "D"): 1,
-            ("B", "E"): 5,
-            ("C", "E"): 9,
-            ("A", "B"): 4,
-            ("B", "C"): 6,
-        }
-        self.num_buses = 2
 
         # DEAP setup
         creator.create("FitnessMulti", base.Fitness, weights=(-1.0, -1.0, -1.0))
@@ -59,60 +70,38 @@ class BusRouteOptimization:
         for i, stop in enumerate(shuffled_stops):
             bus = f"Bus {(i % self.num_buses) + 1}"
             buses[bus].append(stop)
-        return buses
+        return self.starting_pop
 
     # Creating the evaluation function
     # Should look at a given route and calculate the average distance, wait time, and travel time
     def evaluate(self, individual):
         total_distance, total_wait_time, total_travel_time = 0, 0, 0
-        num_distances, num_routes = 0, 0
 
-        # Check if all stops are covered
-        all_stops = set(self.stops)
-        covered_stops = set(stop for route in individual.values() for stop in route)
-        # Penalize individuals that do not cover all stops
-        if covered_stops != all_stops:
-            return 1e10, 1e10, 1e10
+        # Repair invalid routes directly
+        individual = self.repair_routes(individual)
 
-        # Loop through each bus and calculate metrics
         for bus, route in individual.items():
-            #Skip empty routes or single stop routes
             if len(route) < 2:
                 continue
 
-            route_distance, route_travel_time, route_wait_time = 0, 0, 0
-
-            # Calculate route metrics
             for i in range(len(route) - 1):
                 stop1, stop2 = route[i], route[i + 1]
-                # Check if the route is valid
-                if self.isRouteValid(stop1, stop2):
-                    route_distance += self.distance_matrix.get((stop1, stop2), 1e10)
-                    route_travel_time += self.travel_time.get((stop1, stop2), 1e10)
-                    num_distances += 1
-                # Penalize invalid routes
-                else:
-                    return 1e10, 1e10, 1e10  
+                if not self.isRouteValid(stop1, stop2):
+                    return 1e10, 1e10, 1e10
 
-            # Update total metrics
-            total_distance += route_distance
-            total_travel_time += route_travel_time
-            total_wait_time += route_travel_time  
-            num_routes += 1
+                total_distance += self.distance_matrix.get((stop1, stop2), 1e10)
+                total_travel_time += self.travel_time.get((stop1, stop2), 1e10)
 
-        # Calculate averages
-        average_distance = total_distance / num_distances if num_distances > 0 else 1e10
-        average_wait_time = total_wait_time / num_routes if num_routes > 0 else 1e10
-        average_travel_time = total_travel_time / num_distances if num_distances > 0 else 1e10
+        average_distance = total_distance / len(self.stops)
+        average_travel_time = total_travel_time / len(self.stops)
+        average_wait_time = average_travel_time  # Adjust logic as needed
 
         return average_distance, average_wait_time, average_travel_time
 
     # Check if a route between two stops is valid
     def isRouteValid(self, stop1, stop2):
-        if stop1 == stop2:
-            return False
-        if stop1 not in self.stops or stop2 not in self.stops:
-            return False
+        if stop1 or stop2 == "":
+            return True
         if (stop1, stop2) not in self.distance_matrix and (stop2, stop1) not in self.distance_matrix:
             return False
         return True
@@ -122,11 +111,11 @@ class BusRouteOptimization:
     def crossover(self, ind1, ind2):
        # Select two random buses from each parent
         bus1, bus2 = random.sample(list(ind1.keys()), 1)[0], random.sample(list(ind2.keys()), 1)[0]
-        
+
         # Get the routes for the selected buses
         route1, route2 = ind1[bus1], ind2[bus2]
 
-    
+
         size = min(len(route1), len(route2))
         if size > 1:
             idx = random.randint(1, size - 1)
@@ -192,7 +181,7 @@ class BusRouteOptimization:
 
         return individual
 
-    def run(self, generations=50, population_size=50):
+    def run(self, generations=100, population_size=50):
         population = self.toolbox.population(n=population_size)
         hof = tools.ParetoFront()
         stats = tools.Statistics(lambda ind: ind.fitness.values)
@@ -203,7 +192,7 @@ class BusRouteOptimization:
         algorithms.eaMuPlusLambda(
             population, self.toolbox,
             mu=population_size, lambda_=2 * population_size,
-            cxpb=0.7, mutpb=0.2, ngen=generations,
+            cxpb=0.6, mutpb=0.4, ngen=generations,
             stats=stats, halloffame=hof, verbose=True
         )
         return population, hof
